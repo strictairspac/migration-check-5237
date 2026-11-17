@@ -2,7 +2,7 @@ from src.config.database import Base,engine,Session
 from src.models.identity import User,Audit
 from src.models.batch import Batch
 from src.models.mapping import Mapping
-from src.models.run import Run,TargetRow
+from src.models.run import Run,TargetRow,RejectedRow
 from src.utils.security import hash_password
 RULES=[{'source':a,'target':b,'type':c,'required':True} for a,b,c in [('委托号','sample_code','text'),('检测项','test_name','text'),('结果','result_value','decimal'),('单位','unit','text'),('时间','measured_at','datetime')]]
 def seed():

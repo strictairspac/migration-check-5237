@@ -16,8 +16,13 @@ def detail(item_id:int,u=Depends(current)):return runs.detail(item_id)
 @router.post('/runs/{item_id}/cancel')
 def cancel(item_id:int,u=Depends(writer)):
  r=runs.cancel(item_id);log(u.email,'run.cancel',str(item_id));return r
+@router.post('/runs/{item_id}/resume')
+def resume(item_id:int,u=Depends(writer)):
+ r=runs.resume(item_id);log(u.email,'run.resume',str(item_id));return r
 @router.get('/runs/{item_id}/targets')
 def targets(item_id:int,u=Depends(current)):return runs.targets(item_id)
+@router.get('/runs/{item_id}/rejected')
+def rejected(item_id:int,u=Depends(current)):return runs.rejected(item_id)
 @router.get('/runs/{item_id}/backup')
 def backup(item_id:int,u=Depends(current)):
  return Response(json.dumps(runs.backup(item_id),ensure_ascii=False,indent=2),media_type='application/json',headers={'Content-Disposition':f'attachment; filename="backup-{item_id}.json"'})

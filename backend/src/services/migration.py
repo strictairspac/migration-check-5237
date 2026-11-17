@@ -1,8 +1,11 @@
-import json,hashlib,math
+import json,hashlib
 from decimal import Decimal,InvalidOperation
 from datetime import datetime,timezone,timedelta
 from src.constants.enums import TYPES
 class Cancelled(Exception):pass
+class FencedOut(Cancelled):
+ """旧执行者的击剑令牌已失效（运行被接管），其迟到写入必须被拒绝。"""
+ pass
 def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 def key_digest(row):return digest([row['sample_code'],row['test_name']])
 def validate_rules(rules):
@@ -40,27 +43,42 @@ def convert(value,kind,required):
   except (ValueError,TypeError):raise ValueError('invalid_datetime')
  raise ValueError('invalid_type')
 
-def migrate(rows,rules,chunk_size,progress=lambda p:None):
- validate_rules(rules)
+def check_quota(rows,chunk_size):
  if not 1<=chunk_size<=500 or len(rows)>2000:raise ValueError('迁移配额超限')
+
+def process_chunk(chunk,start,rules,seen):
+ """纯函数转换一个块。seen 为已接受自然键集合（跨块去重，最早合法行保留），
+ 返回 (accepted, rejected)，与一次性迁移逐行结果完全一致。"""
+ accepted=[];rejected=[]
+ for offset,source in enumerate(chunk):
+  try:
+   target={}
+   for rule in rules:
+    if rule['source'] not in source:raise ValueError('missing_column:'+rule['source'])
+    try:target[rule['target']]=convert(source[rule['source']],rule['type'],rule['required'])
+    except ValueError as e:raise ValueError(rule['target']+':'+str(e))
+   key=key_digest(target)
+   if key in seen:raise ValueError('duplicate_natural_key:sample_code+test_name')
+   seen.add(key);accepted.append(target)
+  except (ValueError,TypeError) as e:rejected.append({'row_number':start+offset+1,'reason':str(e),'source':source})
+ return accepted,rejected
+
+def assemble_result(accepted_all,rejected_all,chunks,source_count):
+ """按已持久化的接受/拒绝行组装与不停机迁移相同结构的结果与摘要。"""
+ return {'accepted_rows':accepted_all,'rejected_rows':rejected_all,'row_hashes':[digest(r) for r in accepted_all],'checksum':digest(accepted_all),'chunks':chunks,'source_count':source_count,'accepted_count':len(accepted_all),'rejected_count':len(rejected_all)}
+
+def migrate(rows,rules,chunk_size,progress=lambda p:None):
+ """一次性迁移（保留原行为，用于等价对照与测试）。"""
+ validate_rules(rules);check_quota(rows,chunk_size)
  accepted=[];rejected=[];seen=set();chunks=[]
  for start in range(0,len(rows),chunk_size):
   chunk=rows[start:start+chunk_size]
-  for offset,source in enumerate(chunk):
-   try:
-    target={}
-    for rule in rules:
-     if rule['source'] not in source:raise ValueError('missing_column:'+rule['source'])
-     try:target[rule['target']]=convert(source[rule['source']],rule['type'],rule['required'])
-     except ValueError as e:raise ValueError(rule['target']+':'+str(e))
-    key=key_digest(target)
-    if key in seen:raise ValueError('duplicate_natural_key:sample_code+test_name')
-    seen.add(key);accepted.append(target)
-   except (ValueError,TypeError) as e:rejected.append({'row_number':start+offset+1,'reason':str(e),'source':source})
+  a,r=process_chunk(chunk,start,rules,seen)
+  accepted.extend(a);rejected.extend(r)
   item={'chunk':len(chunks)+1,'processed':start+len(chunk),'accepted':len(accepted),'rejected':len(rejected)}
   chunks.append(item);progress(item)
- if not rows:progress({'chunk':0,'processed':0,'accepted':0,'rejected':0})
- return {'accepted_rows':accepted,'rejected_rows':rejected,'row_hashes':[digest(r) for r in accepted],'checksum':digest(accepted),'chunks':chunks,'source_count':len(rows),'accepted_count':len(accepted),'rejected_count':len(rejected)}
+ if not rows:progress({'chunk':0,'processed':0,'accepted':0,'rejected':0,'chunks':[]})
+ return assemble_result(accepted,rejected,chunks,len(rows))
 
 def make_backup(result,run_id,batch_name):
  return {'version':1,'run_id':run_id,'batch_name':batch_name,'rows':result['accepted_rows'],'row_hashes':result['row_hashes'],'checksum':result['checksum'],'kind':'logical-json-snapshot'}
